@@ -2,8 +2,10 @@
 
 use nom::branch::alt;
 use nom::bytes::streaming::{tag, take_while, take_while1, take_while_m_n};
-use nom::character::streaming::{char, crlf, digit1};
-use nom::combinator::{map_res, not};
+use nom::character::is_alphanumeric;
+use nom::character::streaming::{crlf, digit1};
+use nom::combinator::{map_res, not, opt, peek};
+use nom::multi::{length_data, many1_count};
 use nom::sequence::{delimited, tuple};
 use nom::IResult;
 
@@ -57,8 +59,14 @@ fn is_list_wildcards(i: u8) -> bool {
     i == b'%' || i == b'*'
 }
 
+// resp-specials = ']'
 fn is_resp_specials(i: u8) -> bool {
     i == b']'
+}
+
+// base64-char = ALPHA | DIGIT | '+' | '/'
+fn is_base64_char(i: u8) -> bool {
+    is_alphanumeric(i) || i == b'+' || i == b'/'
 }
 
 // atom-specials = '(' | ')' | '{' | SP | CTL | list-wildcards | quoted-specials | resp-specials
@@ -79,7 +87,7 @@ fn is_atom_char(i: u8) -> bool {
 }
 
 // ASTRING-CHAR = ATOM-CHAR | resp-specials
-fn is_astring_char(i: u8) -> bool {
+pub(super) fn is_astring_char(i: u8) -> bool {
     is_atom_char(i) || is_resp_specials(i)
 }
 
@@ -124,6 +132,29 @@ pub(super) fn quoted(i: &[u8]) -> IResult<&[u8], &str> {
 //
 pub(super) fn string(i: &[u8]) -> IResult<&[u8], &str> {
     alt((quoted, literal))(i)
+}
+
+// base64-terminal = (2base64-char '==') | (3base64-char '=')
+pub(super) fn base64_terminal(i: &[u8]) -> IResult<&[u8], &str> {
+    map_res(
+        length_data(many1_count(peek(alt((
+            tuple((take_while_m_n(2, 2, is_base64_char), tag("=="))),
+            tuple((take_while_m_n(3, 3, is_base64_char), tag("="))),
+        ))))),
+        std::str::from_utf8,
+    )(i)
+}
+
+// base64 = *(4base64_char) [base64_terminal]
+pub(super) fn base64(i: &[u8]) -> IResult<&[u8], &str> {
+    // TODO: Check it
+    map_res(
+        length_data(many1_count(peek(tuple((
+            take_while_m_n(4, 4, is_base64_char),
+            opt(base64_terminal),
+        ))))),
+        std::str::from_utf8,
+    )(i)
 }
 
 // numbers

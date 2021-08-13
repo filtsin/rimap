@@ -1,13 +1,18 @@
 //! IMAP grammar [rfc3501]
 
+use std::char::from_u32;
+
+use crate::tag::Tag;
+
 use super::response::{
-    ByeResponse, Capability, Flag, Greeting, GreetingStatus, RespText, RespTextCode,
+    ByeResponse, Capability, ContinueReq, Flag, Greeting, GreetingStatus, ImapResult, RespText,
+    RespTextCode, TaggedResponse,
 };
 use super::types::*;
 use nom::branch::alt;
-use nom::bytes::streaming::{tag, tag_no_case};
+use nom::bytes::streaming::{tag, tag_no_case, take_while_m_n};
 use nom::character::streaming::crlf;
-use nom::combinator::{map, opt};
+use nom::combinator::{map, opt, value};
 use nom::multi::{many0, many1};
 use nom::sequence::{delimited, preceded, separated_pair, terminated, tuple};
 use nom::IResult;
@@ -30,6 +35,54 @@ pub(super) fn greeting(i: &[u8]) -> IResult<&[u8], Greeting<'_>> {
             crlf,
         ),
         |status| Greeting { status },
+    )(i)
+}
+
+// continue-req = '+' SP (resp-text | base64) CRLF
+pub(super) fn continue_req(i: &[u8]) -> IResult<&[u8], ContinueReq<'_>> {
+    delimited(
+        tag("+ "),
+        alt((
+            map(resp_text, |text| ContinueReq::Text(text)),
+            map(base64, |base64| ContinueReq::Base64(base64)),
+        )),
+        crlf,
+    )(i)
+}
+
+// response-tagged = tag SP resp-cond-state CRLF
+pub(super) fn response_tagged(i: &[u8]) -> IResult<&[u8], TaggedResponse<'_>> {
+    map(
+        tuple((imap_tag, tag(" "), resp_cond_state, crlf)),
+        |(tag, _, (result, text), _)| TaggedResponse { tag, result, text },
+    )(i)
+}
+
+// tag(rfc) = 1*<any ASTRING-CHAR except '+'>
+// tag(this) = ASTRING-CHAR number
+// We use our own (tag)[tag::Tag] definition of tag
+// with one prefix letter and u32 id
+fn imap_tag(i: &[u8]) -> IResult<&[u8], Tag> {
+    map(
+        tuple((take_while_m_n(1, 1, is_astring_char), number)),
+        |(letter, index)| {
+            let prefix = from_u32(letter[0] as u32).unwrap();
+            Tag::new(prefix, index)
+        },
+    )(i)
+}
+
+// resp-cond-state = ("OK" | "NO" | "BAD") SP resp_text;
+// Status condition
+fn resp_cond_state(i: &[u8]) -> IResult<&[u8], (ImapResult, RespText<'_>)> {
+    separated_pair(
+        alt((
+            value(ImapResult::Ok, tag_no_case("OK")),
+            value(ImapResult::No, tag_no_case("NO")),
+            value(ImapResult::Bad, tag_no_case("BAD")),
+        )),
+        tag(" "),
+        resp_text,
     )(i)
 }
 

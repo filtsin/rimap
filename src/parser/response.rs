@@ -11,6 +11,19 @@ pub(crate) struct Greeting<'a> {
 }
 
 #[derive(Debug)]
+pub(crate) enum ContinueReq<'a> {
+    Text(RespText<'a>),
+    Base64(&'a str),
+}
+
+#[derive(Debug)]
+pub(crate) struct TaggedResponse<'a> {
+    pub(crate) tag: Tag,
+    pub(crate) result: ImapResult,
+    pub(crate) text: RespText<'a>,
+}
+
+#[derive(Debug)]
 pub(crate) enum GreetingStatus<'a> {
     Ok(RespText<'a>),
     Preauth(RespText<'a>),
@@ -33,7 +46,7 @@ pub(crate) enum ImapResponse<'a> {
     },
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub(crate) enum ImapResult {
     Ok,
     Bad,

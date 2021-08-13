@@ -9,12 +9,14 @@ DQUOTE = _{ "\x22" }
 DIGIT = _{ '0'..'9' }
 // Imap grammar [rfc3501]
 
-main = _{ greeting }
+main = _{ continue_req }
 
-greeting = { "*" ~ SP ~ (resp_cond_auth | resp_cond_bye) ~ CRLF }
+continue_req = { "+" ~ SP ~ (resp_text | base64) ~ CRLF }
 
-resp_cond_auth = { ("OK" | "PREAUTH") ~ SP ~ resp_text }
-resp_cond_bye = { "BYE" ~ SP ~ resp_text }
+response_tagged = { tag ~ SP ~ resp_cond_state ~ CRLF }
+
+tag = { (!"+" ~ ASTRING_CHAR)+ }
+resp_cond_state = { ("OK" | "NO" | "BAD") ~ SP ~ resp_text }
 
 resp_text = { ("[" ~ resp_text_code ~ "]" ~ SP)? ~ text }
 resp_text_code = { "ALERT" | "BADCHARSET" ~ (SP ~ "(" ~ astring ~ (SP ~ astring)* ~ ")")? | capability_data | "PARSE" | "PERMANENTFLAGS" ~ SP ~ "(" ~ (flag_perm ~ (SP ~ flag_perm)*)? ~ ")" | "READ-ONLY" | "READ-WRITE" | "TRYCREATE" | "UIDNEXT" ~ SP ~ nz_number | "UIDVALIDITY" ~ SP ~ nz_number | "UNSEEN" ~ SP ~ nz_number | atom ~ (SP ~ (!"]" ~ TEXT_CHAR)+)? }
@@ -53,4 +55,8 @@ nz_number = { digit_nz ~ DIGIT* }
 digit_nz = { '1'..'9' }
 number = { DIGIT+ }
 
-
+//
+base64 = { (base64_char){4}* ~ (base64_terminal)? }
+ALPHA = _{ 'a'..'z' | 'A'..'Z' }
+base64_char = { ALPHA | DIGIT | "+" | "/" }
+base64_terminal = { ((base64_char){2} ~ "==") | ((base64_char){3} ~ "=") }
