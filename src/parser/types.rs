@@ -49,8 +49,9 @@ fn is_quoted_specials(i: u8) -> bool {
     i == b'"' || i == b'\\'
 }
 
+// TODO: incorrect 2nd or: '\' quoted-specials
 // QUOTED-CHAR = <any TEXT-CHAR except quoted-specials> | quoted-specials
-fn is_quoted_char(i: u8) -> bool {
+pub(super) fn is_quoted_char(i: u8) -> bool {
     is_quoted_specials(i) || is_text_char(i)
 }
 
@@ -147,7 +148,7 @@ pub(super) fn base64_terminal(i: &[u8]) -> IResult<&[u8], &str> {
 
 // base64 = *(4base64_char) [base64_terminal]
 pub(super) fn base64(i: &[u8]) -> IResult<&[u8], &str> {
-    // TODO: Check it
+    // ODO: Check it
     map_res(
         length_data(many1_count(peek(tuple((
             take_while_m_n(4, 4, is_base64_char),

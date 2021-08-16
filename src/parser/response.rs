@@ -19,8 +19,7 @@ pub(crate) enum ContinueReq<'a> {
 #[derive(Debug)]
 pub(crate) struct TaggedResponse<'a> {
     pub(crate) tag: Tag,
-    pub(crate) result: ImapResult,
-    pub(crate) text: RespText<'a>,
+    pub(crate) resp: RespCond<'a>,
 }
 
 #[derive(Debug)]
@@ -28,6 +27,18 @@ pub(crate) enum GreetingStatus<'a> {
     Ok(RespText<'a>),
     Preauth(RespText<'a>),
     Bye(ByeResponse<'a>),
+}
+
+#[derive(Debug)]
+pub(crate) enum UntaggedResponse<'a> {
+    RespCond(RespCond<'a>),
+    RespBye(ByeResponse<'a>),
+}
+
+#[derive(Debug)]
+pub(crate) struct RespCond<'a> {
+    pub(crate) status: ImapResult,
+    pub(crate) text: RespText<'a>,
 }
 
 #[derive(Debug)]
@@ -106,6 +117,54 @@ impl<'a> From<&'a str> for Flag<'a> {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ListDefinedFlag {
+    Noinferiors,
+    Noselect,
+    Marked,
+    Unmarked,
+}
+
+impl TryFrom<&str> for ListDefinedFlag {
+    type Error = Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "\\Noinferiors" => Ok(Self::Noinferiors),
+            "\\Noselect" => Ok(Self::Noselect),
+            "\\Marked" => Ok(Self::Marked),
+            "\\Unmarked" => Ok(Self::Unmarked),
+            _ => Err(create_custom_error(format!(
+                "Can not convert {} into ListDefinedFlag",
+                value
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ListFlag<'a> {
+    Defined(ListDefinedFlag),
+    Extension(&'a str),
+}
+
+impl<'a> From<&'a str> for ListFlag<'a> {
+    fn from(s: &'a str) -> Self {
+        if let Ok(v) = ListDefinedFlag::try_from(s) {
+            Self::Defined(v)
+        } else {
+            Self::Extension(s)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ListMailBox<'a> {
+    pub(crate) flags: Vec<ListFlag<'a>>,
+    pub(crate) delimiter: &'a str,
+    pub(crate) name: &'a str,
+}
+
 #[derive(Debug)]
 pub(crate) enum Capability<'a> {
     // TODO: Create enum for common auth types
@@ -134,4 +193,10 @@ pub(crate) enum RespTextCode<'a> {
 pub(crate) struct RespText<'a> {
     pub(crate) code: Vec<RespTextCode<'a>>,
     pub(crate) text: &'a str,
+}
+
+#[derive(Debug)]
+pub(crate) enum MailBoxData<'a> {
+    Flags(Vec<Flag<'a>>),
+    List(ListMailBox<'a>),
 }

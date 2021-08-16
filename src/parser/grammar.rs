@@ -2,18 +2,19 @@
 
 use std::char::from_u32;
 
+use crate::parser::response::ListFlag;
 use crate::tag::Tag;
 
 use super::response::{
-    ByeResponse, Capability, ContinueReq, Flag, Greeting, GreetingStatus, ImapResult, RespText,
-    RespTextCode, TaggedResponse,
+    ByeResponse, Capability, ContinueReq, Flag, Greeting, GreetingStatus, ImapResult, ListMailBox,
+    MailBoxData, RespCond, RespText, RespTextCode, TaggedResponse, UntaggedResponse,
 };
 use super::types::*;
 use nom::branch::alt;
 use nom::bytes::streaming::{tag, tag_no_case, take_while_m_n};
 use nom::character::streaming::crlf;
-use nom::combinator::{map, opt, value};
-use nom::multi::{many0, many1};
+use nom::combinator::{map, map_res, opt, value};
+use nom::multi::{many0, many1, separated_list0, separated_list1};
 use nom::sequence::{delimited, preceded, separated_pair, terminated, tuple};
 use nom::IResult;
 
@@ -54,7 +55,105 @@ pub(super) fn continue_req(i: &[u8]) -> IResult<&[u8], ContinueReq<'_>> {
 pub(super) fn response_tagged(i: &[u8]) -> IResult<&[u8], TaggedResponse<'_>> {
     map(
         tuple((imap_tag, tag(" "), resp_cond_state, crlf)),
-        |(tag, _, (result, text), _)| TaggedResponse { tag, result, text },
+        |(tag, _, resp, _)| TaggedResponse { tag, resp },
+    )(i)
+}
+
+//response-data = '*' SP (resp-cond-state | resp-cond-bye | mailbox-data |
+//                        message-data | capability-data) CRLF
+pub(super) fn response_data(i: &[u8]) -> IResult<&[u8], UntaggedResponse<'_>> {
+    delimited(
+        tag("* "),
+        alt((
+            map(resp_cond_state, |res| UntaggedResponse::RespCond(res)),
+            map(resp_cond_bye, |res| UntaggedResponse::RespBye(res)),
+        )),
+        crlf,
+    )(i)
+}
+
+//mailbox-data = 'FLAGS' SP flag-list | 'LIST' SP mailbox-list | 'LSUB' SP mailbox-list |
+//               'SEARCH' *(SP nz-number) | 'STATUS' SP mailbox SP '(' [status-att-list] ')' |
+//               number SP 'EXISTS' | number SP 'RECENT'
+fn mailbox_data(i: &[u8]) -> IResult<&[u8], MailBoxData<'_>> {
+    alt((
+        map(preceded(tag_no_case("FLAGS "), flag_list), |flags| {
+            MailBoxData::Flags(flags)
+        }),
+        map(preceded(tag_no_case("LIST "), mailbox_list), |list| {
+            MailBoxData::List(list)
+        }),
+    ))(i)
+}
+
+//flag-list = '(' [flag *(SP flag)] ')'
+fn flag_list(i: &[u8]) -> IResult<&[u8], Vec<Flag<'_>>> {
+    delimited(
+        tag("("),
+        separated_list0(tag(" "), map(flag, Flag::from)),
+        tag(")"),
+    )(i)
+}
+
+//mailbox-list = '(' [mbx-list-flags] ')' SP (DQUOTE QUOTED-CHAR DQUOTE | nil) SP mailbox
+fn mailbox_list(i: &[u8]) -> IResult<&[u8], ListMailBox<'_>> {
+    // TODO: I do not like how it looks now
+    map(
+        tuple((
+            delimited(tag("("), opt(mbx_list_flags), tag(")")),
+            tag(" "),
+            alt((
+                delimited(tag("\""), take_while_m_n(1, 1, is_quoted_char), tag("\"")),
+                tag_no_case("NIL"),
+            )),
+            tag(" "),
+            mailbox,
+        )),
+        |(flags, _, delimiter, _, name)| ListMailBox {
+            flags: match flags {
+                Some(v) => v,
+                None => vec![],
+            },
+            delimiter: unsafe { std::str::from_utf8_unchecked(delimiter) },
+            name,
+        },
+    )(i)
+}
+
+//mailbox = 'INBOX' | astring
+fn mailbox(i: &[u8]) -> IResult<&[u8], &str> {
+    astring(i)
+}
+
+//mbx-list-flags = *(mbx-list-oflag SP) mbx-list-sflag *(SP mbx-list-oflag) |
+//                 mbx-list-oflag *(SP mbx-list-oflag)
+fn mbx_list_flags(i: &[u8]) -> IResult<&[u8], Vec<ListFlag<'_>>> {
+    // Allow multiple mbx-list-sflag for easy writing of parser, it is not lethal
+    separated_list1(tag(" "), alt((mbx_list_oflag, mbx_list_sflag)))(i)
+}
+
+//mbx-list-oflag = '\Noinferiors' | flag-extension;
+// Other flags; multiple possible per LIST response
+fn mbx_list_oflag(i: &[u8]) -> IResult<&[u8], ListFlag<'_>> {
+    map(
+        alt((
+            map_res(tag("\\Noinferiors"), std::str::from_utf8),
+            flag_extension,
+        )),
+        ListFlag::from,
+    )(i)
+}
+
+//mbx-list-sflag = '\Noselect' | '\Marked' | '\Unmarked'
+// Selectability flags; only one per LIST response
+fn mbx_list_sflag(i: &[u8]) -> IResult<&[u8], ListFlag<'_>> {
+    map(
+        alt((tag("\\Noselect"), tag("\\Marked"), tag("\\Unmarked"))),
+        |flag| {
+            // SAFETY: flag is \Noselect, \Marked or \Unmarked ASCII texts, so it is valid UTF-8
+            let s = unsafe { std::str::from_utf8_unchecked(flag) };
+            ListFlag::from(s)
+        },
     )(i)
 }
 
@@ -74,15 +173,18 @@ fn imap_tag(i: &[u8]) -> IResult<&[u8], Tag> {
 
 // resp-cond-state = ("OK" | "NO" | "BAD") SP resp_text;
 // Status condition
-fn resp_cond_state(i: &[u8]) -> IResult<&[u8], (ImapResult, RespText<'_>)> {
-    separated_pair(
-        alt((
-            value(ImapResult::Ok, tag_no_case("OK")),
-            value(ImapResult::No, tag_no_case("NO")),
-            value(ImapResult::Bad, tag_no_case("BAD")),
-        )),
-        tag(" "),
-        resp_text,
+fn resp_cond_state(i: &[u8]) -> IResult<&[u8], RespCond<'_>> {
+    map(
+        separated_pair(
+            alt((
+                value(ImapResult::Ok, tag_no_case("OK")),
+                value(ImapResult::No, tag_no_case("NO")),
+                value(ImapResult::Bad, tag_no_case("BAD")),
+            )),
+            tag(" "),
+            resp_text,
+        ),
+        |(status, text)| RespCond { status, text },
     )(i)
 }
 
@@ -94,6 +196,7 @@ fn flag_keyword(i: &[u8]) -> IResult<&[u8], &str> {
 // flag-extension = '\' atom;
 // Future expansion
 fn flag_extension(i: &[u8]) -> IResult<&[u8], &str> {
+    // TODO: incorrect removing suffix '\'
     map(tuple((tag("\\"), atom)), |(_, result)| result)(i)
 }
 
@@ -104,6 +207,7 @@ fn flag_perm(i: &[u8]) -> IResult<&[u8], Flag<'_>> {
 
 // flag = '\Answered' | '\Flagged' | '\Deleted' | '\Seen' | '\Draft' | flag_keyword | flag_extension
 fn flag(i: &[u8]) -> IResult<&[u8], &str> {
+    // \Answered, \Flagged are handle by flag_extension parser
     alt((flag_extension, flag_keyword))(i)
 }
 
@@ -180,13 +284,11 @@ fn rtc_permanent_flags(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(
         delimited(
             tag_no_case("PERMANENTFLAGS ("),
-            opt(many1(terminated(flag_perm, opt(tag(" "))))),
+            // TODO: Use nom::multi::separated_list0 for parsing lists
+            separated_list0(tag(" "), flag_perm),
             tag(")"),
         ),
-        |v| match v {
-            Some(v) => RespTextCode::PermanentFlags(v),
-            None => RespTextCode::PermanentFlags(vec![]),
-        },
+        |v| RespTextCode::PermanentFlags(v),
     )(i)
 }
 
