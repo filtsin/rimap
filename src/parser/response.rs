@@ -74,6 +74,8 @@ pub(crate) enum DefinedFlag {
     Recent,
 }
 
+// TODO: It is incorrect, because flags are case-insesitive
+// Add function for insesitive cmp
 impl TryFrom<&str> for DefinedFlag {
     type Error = Error;
 
@@ -125,6 +127,8 @@ pub(crate) enum ListDefinedFlag {
     Unmarked,
 }
 
+// TODO: It is incorrect, because flags are case-insesitive
+// Add function for insesitive cmp
 impl TryFrom<&str> for ListDefinedFlag {
     type Error = Error;
 

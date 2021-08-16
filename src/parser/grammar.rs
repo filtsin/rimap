@@ -137,7 +137,7 @@ fn mbx_list_flags(i: &[u8]) -> IResult<&[u8], Vec<ListFlag<'_>>> {
 fn mbx_list_oflag(i: &[u8]) -> IResult<&[u8], ListFlag<'_>> {
     map(
         alt((
-            map_res(tag("\\Noinferiors"), std::str::from_utf8),
+            map_res(tag_no_case("\\Noinferiors"), std::str::from_utf8),
             flag_extension,
         )),
         ListFlag::from,
@@ -148,7 +148,11 @@ fn mbx_list_oflag(i: &[u8]) -> IResult<&[u8], ListFlag<'_>> {
 // Selectability flags; only one per LIST response
 fn mbx_list_sflag(i: &[u8]) -> IResult<&[u8], ListFlag<'_>> {
     map(
-        alt((tag("\\Noselect"), tag("\\Marked"), tag("\\Unmarked"))),
+        alt((
+            tag_no_case("\\Noselect"),
+            tag_no_case("\\Marked"),
+            tag_no_case("\\Unmarked"),
+        )),
         |flag| {
             // SAFETY: flag is \Noselect, \Marked or \Unmarked ASCII texts, so it is valid UTF-8
             let s = unsafe { std::str::from_utf8_unchecked(flag) };
@@ -255,7 +259,7 @@ fn rtc_alert(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
 fn rtc_bad_charset(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(
         preceded(
-            tag("BADCHARSET"),
+            tag_no_case("BADCHARSET"),
             opt(delimited(
                 tag(" ("),
                 many1(terminated(astring, opt(tag(" ")))),
