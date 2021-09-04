@@ -2,9 +2,9 @@
 
 mod grammar;
 mod response;
+mod types;
 #[cfg(test)]
 mod tests;
-mod types;
 
 use grammar::greeting;
 use nom::combinator::map;
