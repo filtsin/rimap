@@ -5,48 +5,48 @@ use std::convert::TryFrom;
 
 use crate::error::{create_custom_error, Error};
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct Greeting<'a> {
     pub(crate) status: GreetingStatus<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ContinueReq<'a> {
     Text(RespText<'a>),
     Base64(&'a str),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct TaggedResponse<'a> {
     pub(crate) tag: Tag,
     pub(crate) resp: RespCond<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum GreetingStatus<'a> {
     Ok(RespText<'a>),
     Preauth(RespText<'a>),
     Bye(ByeResponse<'a>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum UntaggedResponse<'a> {
     RespCond(RespCond<'a>),
     RespBye(ByeResponse<'a>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct RespCond<'a> {
     pub(crate) status: ImapResult,
     pub(crate) text: RespText<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ByeResponse<'a> {
     pub(crate) resp: RespText<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ImapResponse<'a> {
     Greeting(Greeting<'a>),
     Continue,
@@ -162,14 +162,14 @@ impl<'a> From<&'a str> for ListFlag<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ListMailBox<'a> {
     pub(crate) flags: Vec<ListFlag<'a>>,
     pub(crate) delimiter: &'a str,
     pub(crate) name: &'a str,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Capability<'a> {
     // TODO: Create enum for common auth types
     Auth(&'a str),
@@ -177,7 +177,7 @@ pub(crate) enum Capability<'a> {
     Other(&'a str),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum RespTextCode<'a> {
     Alert,
     BadCharset(Vec<&'a str>),
@@ -193,13 +193,13 @@ pub(crate) enum RespTextCode<'a> {
     // TODO: add last branch
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) struct RespText<'a> {
     pub(crate) code: Vec<RespTextCode<'a>>,
     pub(crate) text: &'a str,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum MailBoxData<'a> {
     Flags(Vec<Flag<'a>>),
     List(ListMailBox<'a>),
