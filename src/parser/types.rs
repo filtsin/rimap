@@ -1,185 +1,206 @@
-//! IMAP core types
+//!
 
-use nom::branch::alt;
-use nom::bytes::streaming::{tag, take_while, take_while1, take_while_m_n};
-use nom::character::is_alphanumeric;
-use nom::character::streaming::{crlf, digit1};
-use nom::combinator::{map_res, not, opt, peek};
-use nom::multi::{length_data, many1_count};
-use nom::sequence::{delimited, tuple};
-use nom::IResult;
+use crate::tag::Tag;
+use std::convert::TryFrom;
 
-// strings
+use crate::error::{create_custom_error, Error};
 
-// CORE rules from rfc 5234
-
-// CHAR = %x01-7F;
-// any 7-bit US-ASCII character excluding 0
-fn is_char(i: u8) -> bool {
-    (0x01..=0x7f).contains(&i)
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ImapResponse<'a> {
+    Greeting(Greeting<'a>),
+    Continue,
+    Response {
+        tag: Tag,
+        untagged_data: Vec<String>,
+        status: ImapResult,
+    },
 }
 
-// CTL = %x00-1F;
-// controls
-fn is_ctl(i: u8) -> bool {
-    (0x00..=0x1f).contains(&i) || i == 0x7f
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub(crate) enum ImapResult {
+    Ok,
+    Bad,
+    No,
 }
 
-// SP = %x20;
-// space
-fn is_space(i: u8) -> bool {
-    i == b' '
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Greeting<'a> {
+    pub(crate) status: GreetingStatus<'a>,
 }
 
-// rfc 3501
-
-// CHAR8 = %x01-ff;
-// any octet except 0
-fn is_char8(i: u8) -> bool {
-    i != 0x00
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum GreetingStatus<'a> {
+    Ok(RespText<'a>),
+    Preauth(RespText<'a>),
+    Bye(ByeResponse<'a>),
 }
 
-// TEXT-CHAR = <any CHAR except CR and LF>
-fn is_text_char(i: u8) -> bool {
-    is_char(i) && i != b'\r' && i != b'\n'
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ContinueReq<'a> {
+    Text(RespText<'a>),
+    Base64(&'a str),
 }
 
-// quoted-specials = '"' | '\'
-fn is_quoted_specials(i: u8) -> bool {
-    i == b'"' || i == b'\\'
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct TaggedResponse<'a> {
+    pub(crate) tag: Tag,
+    pub(crate) resp: RespCond<'a>,
 }
 
-// TODO: incorrect 2nd or: '\' quoted-specials
-// QUOTED-CHAR = <any TEXT-CHAR except quoted-specials> | quoted-specials
-pub(super) fn is_quoted_char(i: u8) -> bool {
-    is_quoted_specials(i) || is_text_char(i)
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum UntaggedResponse<'a> {
+    RespCond(RespCond<'a>),
+    RespBye(ByeResponse<'a>),
 }
 
-// list-wildcards = '%' | '*'
-fn is_list_wildcards(i: u8) -> bool {
-    i == b'%' || i == b'*'
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct RespCond<'a> {
+    pub(crate) status: ImapResult,
+    pub(crate) text: RespText<'a>,
 }
 
-// resp-specials = ']'
-fn is_resp_specials(i: u8) -> bool {
-    i == b']'
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ByeResponse<'a> {
+    pub(crate) resp: RespText<'a>,
 }
 
-// base64-char = ALPHA | DIGIT | '+' | '/'
-fn is_base64_char(i: u8) -> bool {
-    is_alphanumeric(i) || i == b'+' || i == b'/'
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum DefinedFlag {
+    Seen,
+    Answered,
+    Flagged,
+    Deleted,
+    Draft,
+    Recent,
 }
 
-// atom-specials = '(' | ')' | '{' | SP | CTL | list-wildcards | quoted-specials | resp-specials
-fn is_atom_specials(i: u8) -> bool {
-    i == b')'
-        || i == b')'
-        || i == b'{'
-        || is_space(i)
-        || is_ctl(i)
-        || is_list_wildcards(i)
-        || is_quoted_specials(i)
-        || is_resp_specials(i)
-}
+// TODO: It is incorrect, because flags are case-insesitive
+// Add function for insesitive cmp
+impl TryFrom<&str> for DefinedFlag {
+    type Error = Error;
 
-// ATOM-CHAR = <any CHAR except atom-specials>
-fn is_atom_char(i: u8) -> bool {
-    !is_atom_specials(i) && is_char(i)
-}
-
-// ASTRING-CHAR = ATOM-CHAR | resp-specials
-pub(super) fn is_astring_char(i: u8) -> bool {
-    is_atom_char(i) || is_resp_specials(i)
-}
-
-// astring = 1*ASTRING-CHAR | string
-pub(super) fn astring(i: &[u8]) -> IResult<&[u8], &str> {
-    alt((
-        string,
-        map_res(take_while1(is_astring_char), std::str::from_utf8),
-    ))(i)
-}
-
-// atom = 1*ATOM-CHAR
-pub(super) fn atom(i: &[u8]) -> IResult<&[u8], &str> {
-    map_res(take_while1(is_atom_char), std::str::from_utf8)(i)
-}
-
-// literal = "{" number "}" CRLF *CHAR8;
-// number represents the number of CHAR8s
-pub(super) fn literal(i: &[u8]) -> IResult<&[u8], &str> {
-    let (i, (_, count, _, _)) = tuple((tag("{"), number, tag("}"), crlf))(i)?;
-    let parser = take_while_m_n(count as usize, count as usize, is_char8);
-
-    map_res(parser, std::str::from_utf8)(i)
-}
-
-// text = 1*TEXT-CHAR
-//
-pub(super) fn text(i: &[u8]) -> IResult<&[u8], &str> {
-    map_res(take_while1(is_text_char), std::str::from_utf8)(i)
-}
-
-// quoted = DQUOTE *QUOTED-CHAR DQUOTE;
-// quoted text
-pub(super) fn quoted(i: &[u8]) -> IResult<&[u8], &str> {
-    map_res(
-        delimited(tag("\""), take_while(is_quoted_char), tag("\"")),
-        std::str::from_utf8,
-    )(i)
-}
-
-// string = quoted | literal
-//
-pub(super) fn string(i: &[u8]) -> IResult<&[u8], &str> {
-    alt((quoted, literal))(i)
-}
-
-// base64-terminal = (2base64-char '==') | (3base64-char '=')
-pub(super) fn base64_terminal(i: &[u8]) -> IResult<&[u8], &str> {
-    map_res(
-        length_data(many1_count(peek(alt((
-            tuple((take_while_m_n(2, 2, is_base64_char), tag("=="))),
-            tuple((take_while_m_n(3, 3, is_base64_char), tag("="))),
-        ))))),
-        std::str::from_utf8,
-    )(i)
-}
-
-// base64 = *(4base64_char) [base64_terminal]
-pub(super) fn base64(i: &[u8]) -> IResult<&[u8], &str> {
-    // ODO: Check it
-    map_res(
-        length_data(many1_count(peek(tuple((
-            take_while_m_n(4, 4, is_base64_char),
-            opt(base64_terminal),
-        ))))),
-        std::str::from_utf8,
-    )(i)
-}
-
-// numbers
-
-// number = 1*DIGIT;
-// unsigned 32-bit integer
-pub(super) fn number(i: &[u8]) -> IResult<&[u8], u32> {
-    let (i, number) = digit1(i)?;
-
-    // SAFETY: number contains only 0-9 ASCII characters so it is correct utf-8
-    let number = unsafe { std::str::from_utf8_unchecked(number) };
-
-    match number.parse::<u32>().ok() {
-        Some(v) => Ok((i, v)),
-        None => Err(nom::Err::Error(nom::error::make_error(
-            i,
-            nom::error::ErrorKind::ParseTo,
-        ))),
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "\\Seen" => Ok(Self::Seen),
+            "\\Answred" => Ok(Self::Answered),
+            "\\Flagged" => Ok(Self::Flagged),
+            "\\Deleted" => Ok(Self::Deleted),
+            "\\Draft" => Ok(Self::Draft),
+            "\\Recent" => Ok(Self::Recent),
+            _ => Err(create_custom_error(format!(
+                "Can not convert {} into DefinedFlag",
+                value
+            ))),
+        }
     }
 }
 
-// nz-number = digit-nz *DIGIT;
-// non-zero unsigned 32-bit integer
-pub(super) fn nz_number(i: &[u8]) -> IResult<&[u8], u32> {
-    let (i, (_, result)) = tuple((not(tag("0")), number))(i)?;
-    Ok((i, result))
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum Flag<'a> {
+    Defined(DefinedFlag),
+    Keyword(&'a str),
+    Extension(&'a str),
+    Perm, // \*
+}
+
+impl<'a> From<&'a str> for Flag<'a> {
+    fn from(s: &'a str) -> Self {
+        if let Ok(v) = DefinedFlag::try_from(s) {
+            Self::Defined(v)
+        } else if s.starts_with('\\') {
+            if s == "\\*" {
+                Self::Perm
+            } else {
+                Self::Extension(s)
+            }
+        } else {
+            Self::Keyword(s)
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ListDefinedFlag {
+    Noinferiors,
+    Noselect,
+    Marked,
+    Unmarked,
+}
+
+// TODO: It is incorrect, because flags are case-insesitive
+// Add function for insesitive cmp
+impl TryFrom<&str> for ListDefinedFlag {
+    type Error = Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "\\Noinferiors" => Ok(Self::Noinferiors),
+            "\\Noselect" => Ok(Self::Noselect),
+            "\\Marked" => Ok(Self::Marked),
+            "\\Unmarked" => Ok(Self::Unmarked),
+            _ => Err(create_custom_error(format!(
+                "Can not convert {} into ListDefinedFlag",
+                value
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum ListFlag<'a> {
+    Defined(ListDefinedFlag),
+    Extension(&'a str),
+}
+
+impl<'a> From<&'a str> for ListFlag<'a> {
+    fn from(s: &'a str) -> Self {
+        if let Ok(v) = ListDefinedFlag::try_from(s) {
+            Self::Defined(v)
+        } else {
+            Self::Extension(s)
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct ListMailBox<'a> {
+    pub(crate) flags: Vec<ListFlag<'a>>,
+    pub(crate) delimiter: &'a str,
+    pub(crate) name: &'a str,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum Capability<'a> {
+    // TODO: Create enum for common auth types
+    Auth(&'a str),
+    // TODO: Create enum for common other capabilities
+    Other(&'a str),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum RespTextCode<'a> {
+    Alert,
+    BadCharset(Vec<&'a str>),
+    Capability(Vec<Capability<'a>>),
+    Parse,
+    PermanentFlags(Vec<Flag<'a>>),
+    ReadOnly,
+    ReadWrite,
+    TryCreate,
+    UidNext(u32),
+    UidValidity(u32),
+    Unseen(u32),
+    // TODO: add last branch
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct RespText<'a> {
+    pub(crate) code: Vec<RespTextCode<'a>>,
+    pub(crate) text: &'a str,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum MailBoxData<'a> {
+    Flags(Vec<Flag<'a>>),
+    List(ListMailBox<'a>),
 }

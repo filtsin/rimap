@@ -1,6 +1,6 @@
 use crate::parser::{
     parse,
-    response::{Greeting, GreetingStatus, ImapResponse, RespText},
+    types::{Greeting, GreetingStatus, ImapResponse, RespText},
 };
 
 fn resp_text(s: &str) -> RespText<'_> {

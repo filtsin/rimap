@@ -2,80 +2,25 @@
 
 use std::char::from_u32;
 
-use crate::parser::response::ListFlag;
-use crate::tag::Tag;
-
-use super::response::{
-    ByeResponse, Capability, ContinueReq, Flag, Greeting, GreetingStatus, ImapResult, ListMailBox,
-    MailBoxData, RespCond, RespText, RespTextCode, TaggedResponse, UntaggedResponse,
+use super::core::*;
+use crate::parser::types::{
+    ByeResponse, Capability, Flag, ImapResult, ListFlag, ListMailBox, MailBoxData, RespCond,
+    RespText, RespTextCode,
 };
-use super::types::*;
-use nom::branch::alt;
-use nom::bytes::streaming::{tag, tag_no_case, take_while_m_n};
-use nom::character::streaming::crlf;
-use nom::combinator::{map, map_res, opt, value};
-use nom::multi::{many0, many1, separated_list0, separated_list1};
-use nom::sequence::{delimited, preceded, separated_pair, terminated, tuple};
-use nom::IResult;
-
-// greeting = "*" SP (resp_cond_auth | resp_cond_bye) CRLF
-pub(super) fn greeting(i: &[u8]) -> IResult<&[u8], Greeting<'_>> {
-    map(
-        delimited(
-            tag("* "),
-            alt((
-                map(resp_cond_auth, |(status, resp_text)| {
-                    if status == "OK" {
-                        GreetingStatus::Ok(resp_text)
-                    } else {
-                        GreetingStatus::Preauth(resp_text)
-                    }
-                }),
-                map(resp_cond_bye, |bye_resp| GreetingStatus::Bye(bye_resp)),
-            )),
-            crlf,
-        ),
-        |status| Greeting { status },
-    )(i)
-}
-
-// continue-req = '+' SP (resp-text | base64) CRLF
-pub(super) fn continue_req(i: &[u8]) -> IResult<&[u8], ContinueReq<'_>> {
-    delimited(
-        tag("+ "),
-        alt((
-            map(resp_text, |text| ContinueReq::Text(text)),
-            map(base64, |base64| ContinueReq::Base64(base64)),
-        )),
-        crlf,
-    )(i)
-}
-
-// response-tagged = tag SP resp-cond-state CRLF
-pub(super) fn response_tagged(i: &[u8]) -> IResult<&[u8], TaggedResponse<'_>> {
-    map(
-        tuple((imap_tag, tag(" "), resp_cond_state, crlf)),
-        |(tag, _, resp, _)| TaggedResponse { tag, resp },
-    )(i)
-}
-
-//response-data = '*' SP (resp-cond-state | resp-cond-bye | mailbox-data |
-//                        message-data | capability-data) CRLF
-pub(super) fn response_data(i: &[u8]) -> IResult<&[u8], UntaggedResponse<'_>> {
-    delimited(
-        tag("* "),
-        alt((
-            map(resp_cond_state, |res| UntaggedResponse::RespCond(res)),
-            map(resp_cond_bye, |res| UntaggedResponse::RespBye(res)),
-        )),
-        crlf,
-    )(i)
-}
+use crate::tag::Tag;
+use nom::{
+    branch::alt,
+    bytes::streaming::{tag, tag_no_case, take_while_m_n},
+    combinator::{map, map_res, opt, value},
+    multi::{many0, many1, separated_list0, separated_list1},
+    sequence::{delimited, preceded, separated_pair, terminated, tuple},
+    IResult,
+};
 
 //mailbox-data = 'FLAGS' SP flag-list | 'LIST' SP mailbox-list | 'LSUB' SP mailbox-list |
 //               'SEARCH' *(SP nz-number) | 'STATUS' SP mailbox SP '(' [status-att-list] ')' |
 //               number SP 'EXISTS' | number SP 'RECENT'
-fn mailbox_data(i: &[u8]) -> IResult<&[u8], MailBoxData<'_>> {
+pub(crate) fn mailbox_data(i: &[u8]) -> IResult<&[u8], MailBoxData<'_>> {
     alt((
         map(preceded(tag_no_case("FLAGS "), flag_list), |flags| {
             MailBoxData::Flags(flags)
@@ -87,7 +32,7 @@ fn mailbox_data(i: &[u8]) -> IResult<&[u8], MailBoxData<'_>> {
 }
 
 //flag-list = '(' [flag *(SP flag)] ')'
-fn flag_list(i: &[u8]) -> IResult<&[u8], Vec<Flag<'_>>> {
+pub(crate) fn flag_list(i: &[u8]) -> IResult<&[u8], Vec<Flag<'_>>> {
     delimited(
         tag("("),
         separated_list0(tag(" "), map(flag, Flag::from)),
@@ -96,7 +41,7 @@ fn flag_list(i: &[u8]) -> IResult<&[u8], Vec<Flag<'_>>> {
 }
 
 //mailbox-list = '(' [mbx-list-flags] ')' SP (DQUOTE QUOTED-CHAR DQUOTE | nil) SP mailbox
-fn mailbox_list(i: &[u8]) -> IResult<&[u8], ListMailBox<'_>> {
+pub(crate) fn mailbox_list(i: &[u8]) -> IResult<&[u8], ListMailBox<'_>> {
     // TODO: I do not like how it looks now
     map(
         tuple((
@@ -121,20 +66,20 @@ fn mailbox_list(i: &[u8]) -> IResult<&[u8], ListMailBox<'_>> {
 }
 
 //mailbox = 'INBOX' | astring
-fn mailbox(i: &[u8]) -> IResult<&[u8], &str> {
+pub(crate) fn mailbox(i: &[u8]) -> IResult<&[u8], &str> {
     astring(i)
 }
 
 //mbx-list-flags = *(mbx-list-oflag SP) mbx-list-sflag *(SP mbx-list-oflag) |
 //                 mbx-list-oflag *(SP mbx-list-oflag)
-fn mbx_list_flags(i: &[u8]) -> IResult<&[u8], Vec<ListFlag<'_>>> {
+pub(crate) fn mbx_list_flags(i: &[u8]) -> IResult<&[u8], Vec<ListFlag<'_>>> {
     // Allow multiple mbx-list-sflag for easy writing of parser, it is not lethal
     separated_list1(tag(" "), alt((mbx_list_oflag, mbx_list_sflag)))(i)
 }
 
 //mbx-list-oflag = '\Noinferiors' | flag-extension;
 // Other flags; multiple possible per LIST response
-fn mbx_list_oflag(i: &[u8]) -> IResult<&[u8], ListFlag<'_>> {
+pub(crate) fn mbx_list_oflag(i: &[u8]) -> IResult<&[u8], ListFlag<'_>> {
     map(
         alt((
             map_res(tag_no_case("\\Noinferiors"), std::str::from_utf8),
@@ -146,7 +91,7 @@ fn mbx_list_oflag(i: &[u8]) -> IResult<&[u8], ListFlag<'_>> {
 
 //mbx-list-sflag = '\Noselect' | '\Marked' | '\Unmarked'
 // Selectability flags; only one per LIST response
-fn mbx_list_sflag(i: &[u8]) -> IResult<&[u8], ListFlag<'_>> {
+pub(crate) fn mbx_list_sflag(i: &[u8]) -> IResult<&[u8], ListFlag<'_>> {
     map(
         alt((
             tag_no_case("\\Noselect"),
@@ -165,7 +110,7 @@ fn mbx_list_sflag(i: &[u8]) -> IResult<&[u8], ListFlag<'_>> {
 // tag(this) = ASTRING-CHAR number
 // We use our own (tag)[tag::Tag] definition of tag
 // with one prefix letter and u32 id
-fn imap_tag(i: &[u8]) -> IResult<&[u8], Tag> {
+pub(crate) fn imap_tag(i: &[u8]) -> IResult<&[u8], Tag> {
     map(
         tuple((take_while_m_n(1, 1, is_astring_char), number)),
         |(letter, index)| {
@@ -177,7 +122,7 @@ fn imap_tag(i: &[u8]) -> IResult<&[u8], Tag> {
 
 // resp-cond-state = ("OK" | "NO" | "BAD") SP resp_text;
 // Status condition
-fn resp_cond_state(i: &[u8]) -> IResult<&[u8], RespCond<'_>> {
+pub(crate) fn resp_cond_state(i: &[u8]) -> IResult<&[u8], RespCond<'_>> {
     map(
         separated_pair(
             alt((
@@ -193,36 +138,36 @@ fn resp_cond_state(i: &[u8]) -> IResult<&[u8], RespCond<'_>> {
 }
 
 // flag-keyword = atom
-fn flag_keyword(i: &[u8]) -> IResult<&[u8], &str> {
+pub(crate) fn flag_keyword(i: &[u8]) -> IResult<&[u8], &str> {
     atom(i)
 }
 
 // flag-extension = '\' atom;
 // Future expansion
-fn flag_extension(i: &[u8]) -> IResult<&[u8], &str> {
+pub(crate) fn flag_extension(i: &[u8]) -> IResult<&[u8], &str> {
     // TODO: incorrect removing suffix '\'
     map(tuple((tag("\\"), atom)), |(_, result)| result)(i)
 }
 
 // flag-perm = flag | '\*'
-fn flag_perm(i: &[u8]) -> IResult<&[u8], Flag<'_>> {
+pub(crate) fn flag_perm(i: &[u8]) -> IResult<&[u8], Flag<'_>> {
     map(flag, Flag::from)(i)
 }
 
 // flag = '\Answered' | '\Flagged' | '\Deleted' | '\Seen' | '\Draft' | flag_keyword | flag_extension
-fn flag(i: &[u8]) -> IResult<&[u8], &str> {
+pub(crate) fn flag(i: &[u8]) -> IResult<&[u8], &str> {
     // \Answered, \Flagged are handle by flag_extension parser
     alt((flag_extension, flag_keyword))(i)
 }
 
 // auth-type = atom
-fn auth_type(i: &[u8]) -> IResult<&[u8], &str> {
+pub(crate) fn auth_type(i: &[u8]) -> IResult<&[u8], &str> {
     // TODO: Create enum for auth type
     atom(i)
 }
 
 // capability-data = "CAPABILITY" *(SP CAPABILITY) SP "IMAP4rev1" *(SP capability)
-fn capability_data(i: &[u8]) -> IResult<&[u8], Vec<Capability<'_>>> {
+pub(crate) fn capability_data(i: &[u8]) -> IResult<&[u8], Vec<Capability<'_>>> {
     // Grammar is not exactly as in rfc3501.
     // Just take all capabilities delimited by space
     // hoping that IMAP4rev1 is present
@@ -236,7 +181,7 @@ fn capability_data(i: &[u8]) -> IResult<&[u8], Vec<Capability<'_>>> {
 }
 
 // capability = ('AUTH=' auth-type) | atom;
-fn capability(i: &[u8]) -> IResult<&[u8], Capability<'_>> {
+pub(crate) fn capability(i: &[u8]) -> IResult<&[u8], Capability<'_>> {
     let auth_parser = map(
         tuple((tag_no_case("AUTH="), auth_type)),
         |(_, auth_type)| auth_type,
@@ -251,12 +196,12 @@ fn capability(i: &[u8]) -> IResult<&[u8], Capability<'_>> {
 // resp-text-code branches
 
 // 'ALERT'
-fn rtc_alert(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn rtc_alert(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(tag_no_case("ALERT"), |_| RespTextCode::Alert)(i)
 }
 
 // 'BADCHARSET' [SP '(' astring *(SP astring) ')']
-fn rtc_bad_charset(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn rtc_bad_charset(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(
         preceded(
             tag_no_case("BADCHARSET"),
@@ -274,17 +219,17 @@ fn rtc_bad_charset(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
 }
 
 // capability-data
-fn rtc_capability_data(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn rtc_capability_data(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(capability_data, |v| RespTextCode::Capability(v))(i)
 }
 
 // 'PARSE'
-fn rtc_parse(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn rtc_parse(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(tag_no_case("PARSE"), |_| RespTextCode::Parse)(i)
 }
 
 // 'PERMANENTFLAGS' SP '(' [flag-perm *(SP flag-perm)] ')'
-fn rtc_permanent_flags(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn rtc_permanent_flags(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(
         delimited(
             tag_no_case("PERMANENTFLAGS ("),
@@ -297,36 +242,36 @@ fn rtc_permanent_flags(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
 }
 
 // 'READ-ONLY'
-fn rtc_read_only(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn rtc_read_only(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(tag_no_case("READ-ONLY"), |_| RespTextCode::ReadOnly)(i)
 }
 
 // 'READ-WRITE'
-fn rtc_read_write(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn rtc_read_write(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(tag_no_case("READ-WRITE"), |_| RespTextCode::ReadWrite)(i)
 }
 
 // 'TRYCREATE'
-fn rtc_try_create(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn rtc_try_create(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(tag_no_case("TRYCREATE"), |_| RespTextCode::TryCreate)(i)
 }
 
 // 'UIDNEXT' SP nz-number
-fn rtc_uidnext(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn rtc_uidnext(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(preceded(tag_no_case("UIDNEXT "), nz_number), |result| {
         RespTextCode::UidNext(result)
     })(i)
 }
 
 // 'UIDVALIDITY' SP nz-number
-fn rtc_uidvalidity(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn rtc_uidvalidity(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(preceded(tag_no_case("UIDVALIDITY "), nz_number), |result| {
         RespTextCode::UidValidity(result)
     })(i)
 }
 
 // 'UNSEEN' SP nz-number
-fn rtc_unseen(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn rtc_unseen(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     map(preceded(tag_no_case("UNSEEN "), nz_number), |result| {
         RespTextCode::Unseen(result)
     })(i)
@@ -338,7 +283,7 @@ fn rtc_unseen(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
 //                  "READ-WRITE" | "TRYCREATE" | "UIDNEXT" SP nz-number |
 //                  "UIDVALIDITY" SP nz-number | "UNSEEN" SP nz_number |
 //                  atom [ SP 1*<any TEXT-CHAR except "]"> ]
-fn resp_text_code(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
+pub(crate) fn resp_text_code(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
     alt((
         rtc_alert,
         rtc_bad_charset,
@@ -356,7 +301,7 @@ fn resp_text_code(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
 }
 
 // resp-text = [ "[" resp-text-code "]" SP ] text
-fn resp_text(i: &[u8]) -> IResult<&[u8], RespText<'_>> {
+pub(crate) fn resp_text(i: &[u8]) -> IResult<&[u8], RespText<'_>> {
     map(
         tuple((many0(delimited(tag("["), resp_text_code, tag("] "))), text)),
         |(code, text)| RespText { code, text },
@@ -365,7 +310,7 @@ fn resp_text(i: &[u8]) -> IResult<&[u8], RespText<'_>> {
 
 // resp-cond-auth = ("OK" | "PREAUTH") SP resp-text;
 // Authentication condition
-fn resp_cond_auth(i: &[u8]) -> IResult<&[u8], (&str, RespText<'_>)> {
+pub(crate) fn resp_cond_auth(i: &[u8]) -> IResult<&[u8], (&str, RespText<'_>)> {
     map(
         separated_pair(
             alt((tag_no_case("OK"), tag_no_case("PREAUTH"))),
@@ -381,7 +326,7 @@ fn resp_cond_auth(i: &[u8]) -> IResult<&[u8], (&str, RespText<'_>)> {
 }
 
 // resp-cond-bye = "BYE" SP resp-text
-fn resp_cond_bye(i: &[u8]) -> IResult<&[u8], ByeResponse<'_>> {
+pub(crate) fn resp_cond_bye(i: &[u8]) -> IResult<&[u8], ByeResponse<'_>> {
     map(preceded(tag_no_case("BYE "), resp_text), |resp| {
         ByeResponse { resp }
     })(i)
