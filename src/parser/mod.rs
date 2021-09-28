@@ -5,8 +5,7 @@ mod rfc3501;
 mod tests;
 mod types;
 
-use nom::combinator::map;
-use nom::IResult;
+use nom::{combinator::map, IResult};
 use rfc3501::greeting;
 use types::ImapResponse;
 
