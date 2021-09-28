@@ -10,6 +10,11 @@ fn resp_text(s: &str) -> RespText<'_> {
     }
 }
 
+fn assert_eq((remainder, result): (&[u8], ImapResponse<'_>), target: ImapResponse<'_>) {
+    assert_eq!(remainder.len(), 0);
+    assert_eq!(result, target);
+}
+
 #[test]
 fn parse_greeting() {
     let response = b"* OK IMAP4rev1 Service Ready\r\n";
@@ -20,6 +25,5 @@ fn parse_greeting() {
         status: GreetingStatus::Ok(resp_text("IMAP4rev1 Service Ready")),
     });
 
-    assert_eq!(result.0.len(), 0);
-    assert_eq!(result.1, greeting);
+    assert_eq(result, greeting);
 }
