@@ -1,13 +1,15 @@
 //! IMAP core types
 
-use nom::branch::alt;
-use nom::bytes::streaming::{tag, take_while, take_while1, take_while_m_n};
-use nom::character::is_alphanumeric;
-use nom::character::streaming::{crlf, digit1};
-use nom::combinator::{map_res, not, opt, peek};
-use nom::multi::{length_data, many1_count};
-use nom::sequence::{delimited, tuple};
-use nom::IResult;
+use nom::{
+    branch::alt,
+    bytes::streaming::{tag, take_while, take_while1, take_while_m_n},
+    character::is_alphanumeric,
+    character::streaming::{crlf, u32},
+    combinator::{map_res, not, opt, peek},
+    multi::{length_data, many1_count},
+    sequence::{delimited, tuple},
+    IResult,
+};
 
 // strings
 
@@ -163,18 +165,7 @@ pub(crate) fn base64(i: &[u8]) -> IResult<&[u8], &str> {
 // number = 1*DIGIT;
 // unsigned 32-bit integer
 pub(crate) fn number(i: &[u8]) -> IResult<&[u8], u32> {
-    let (i, number) = digit1(i)?;
-
-    // SAFETY: number contains only 0-9 ASCII characters so it is correct utf-8
-    let number = unsafe { std::str::from_utf8_unchecked(number) };
-
-    match number.parse::<u32>().ok() {
-        Some(v) => Ok((i, v)),
-        None => Err(nom::Err::Error(nom::error::make_error(
-            i,
-            nom::error::ErrorKind::ParseTo,
-        ))),
-    }
+    u32(i)
 }
 
 // nz-number = digit-nz *DIGIT;

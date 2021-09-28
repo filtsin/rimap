@@ -17,4 +17,4 @@ tokio-util = { version = "0.6.6", features = ["codec"] }
 futures = "0.3"
 thiserror = "1.0.24"
 log = "0.4"
-nom = "6.2"
+nom = "7.0"
