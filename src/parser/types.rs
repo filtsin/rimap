@@ -8,12 +8,8 @@ use crate::error::{create_custom_error, Error};
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ImapResponse<'a> {
     Greeting(Greeting<'a>),
-    Continue,
-    Response {
-        tag: Tag,
-        untagged_data: Vec<String>,
-        status: ImapResult,
-    },
+    Continue(ContinueReq<'a>),
+    Response(TaggedResponse<'a>),
 }
 
 #[derive(Debug, Eq, PartialEq, Clone)]
