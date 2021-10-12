@@ -196,7 +196,27 @@ pub(crate) struct RespText<'a> {
 }
 
 #[derive(Debug, Eq, PartialEq)]
+pub(crate) enum StatusInfo {
+    Messages(u32),
+    Recent(u32),
+    UidNext(u32),
+    UidValidity(u32),
+    Unseen(u32),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct StatusResponse<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) status: Vec<StatusInfo>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
 pub(crate) enum MailBoxData<'a> {
     Flags(Vec<Flag<'a>>),
     List(ListMailBox<'a>),
+    Lsub(ListMailBox<'a>),
+    Search(Vec<u32>),
+    Status(StatusResponse<'a>),
+    Exists(u32),
+    Recent(u32),
 }

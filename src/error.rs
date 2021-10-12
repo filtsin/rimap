@@ -1,6 +1,5 @@
 //! Error type
 
-use std::borrow::Cow;
 use thiserror::Error;
 
 /// A convenience wrapper around `Result` for [Error][Error]

@@ -5,7 +5,7 @@ use std::char::from_u32;
 use super::core::*;
 use crate::parser::types::{
     ByeResponse, Capability, Flag, ImapResult, ListFlag, ListMailBox, MailBoxData, RespCond,
-    RespText, RespTextCode,
+    RespText, RespTextCode, StatusInfo, StatusResponse,
 };
 use crate::tag::Tag;
 use nom::{
@@ -22,12 +22,34 @@ use nom::{
 //               number SP 'EXISTS' | number SP 'RECENT'
 pub(crate) fn mailbox_data(i: &[u8]) -> IResult<&[u8], MailBoxData<'_>> {
     alt((
-        map(preceded(tag_no_case("FLAGS "), flag_list), |flags| {
-            MailBoxData::Flags(flags)
-        }),
-        map(preceded(tag_no_case("LIST "), mailbox_list), |list| {
-            MailBoxData::List(list)
-        }),
+        map(
+            preceded(tag_no_case("FLAGS "), flag_list),
+            MailBoxData::Flags,
+        ),
+        map(
+            preceded(tag_no_case("LIST "), mailbox_list),
+            MailBoxData::List,
+        ),
+        map(
+            preceded(tag_no_case("LSUB "), mailbox_list),
+            MailBoxData::Lsub,
+        ),
+        map(
+            preceded(tag_no_case("SEARCH "), mailbox_data_search),
+            MailBoxData::Search,
+        ),
+        map(
+            preceded(tag_no_case("STATUS "), mailbox_data_status),
+            MailBoxData::Status,
+        ),
+        map(
+            terminated(number, tag_no_case(" EXISTS")),
+            MailBoxData::Exists,
+        ),
+        map(
+            terminated(number, tag_no_case(" RECENT")),
+            MailBoxData::Recent,
+        ),
     ))(i)
 }
 
@@ -42,7 +64,6 @@ pub(crate) fn flag_list(i: &[u8]) -> IResult<&[u8], Vec<Flag<'_>>> {
 
 //mailbox-list = '(' [mbx-list-flags] ')' SP (DQUOTE QUOTED-CHAR DQUOTE | nil) SP mailbox
 pub(crate) fn mailbox_list(i: &[u8]) -> IResult<&[u8], ListMailBox<'_>> {
-    // TODO: I do not like how it looks now
     map(
         tuple((
             delimited(tag("("), opt(mbx_list_flags), tag(")")),
@@ -59,10 +80,86 @@ pub(crate) fn mailbox_list(i: &[u8]) -> IResult<&[u8], ListMailBox<'_>> {
                 Some(v) => v,
                 None => vec![],
             },
+            // SAFETY: is_quoted_char is valid ascii character, so it is valid utf-8
             delimiter: unsafe { std::str::from_utf8_unchecked(delimiter) },
             name,
         },
     )(i)
+}
+
+// *(SP nz-number)
+pub(crate) fn mailbox_data_search(i: &[u8]) -> IResult<&[u8], Vec<u32>> {
+    separated_list1(tag(" "), nz_number)(i)
+}
+
+// mailbox SP '(' [status-att-list] ')'
+pub(crate) fn mailbox_data_status(i: &[u8]) -> IResult<&[u8], StatusResponse<'_>> {
+    map(
+        separated_pair(
+            mailbox,
+            tag(" "),
+            delimited(tag("("), opt(status_att_list), tag(")")),
+        ),
+        |(name, status)| {
+            let status = match status {
+                Some(v) => v,
+                None => vec![],
+            };
+            StatusResponse { name, status }
+        },
+    )(i)
+}
+
+// 'MESSAGES' SP number
+pub(crate) fn status_messages(i: &[u8]) -> IResult<&[u8], StatusInfo> {
+    map(
+        preceded(tag_no_case("MESSAGES "), nz_number),
+        StatusInfo::Messages,
+    )(i)
+}
+
+// 'RECENT' SP number
+pub(crate) fn status_recent(i: &[u8]) -> IResult<&[u8], StatusInfo> {
+    map(
+        preceded(tag_no_case("RECENT "), nz_number),
+        StatusInfo::Recent,
+    )(i)
+}
+
+// 'UIDNEXT' SP number
+pub(crate) fn status_uidnext(i: &[u8]) -> IResult<&[u8], StatusInfo> {
+    map(
+        preceded(tag_no_case("UIDNEXT "), nz_number),
+        StatusInfo::UidNext,
+    )(i)
+}
+
+// 'UIDVALIDITY' SP number
+pub(crate) fn status_uidvalidity(i: &[u8]) -> IResult<&[u8], StatusInfo> {
+    map(
+        preceded(tag_no_case("UIDVALIDITY "), nz_number),
+        StatusInfo::UidValidity,
+    )(i)
+}
+
+// 'Unseen' SP number
+pub(crate) fn status_unseen(i: &[u8]) -> IResult<&[u8], StatusInfo> {
+    map(
+        preceded(tag_no_case("UNSEEN "), nz_number),
+        StatusInfo::Unseen,
+    )(i)
+}
+
+// status-att-list = status-att SP number *(SP status-att SP number)
+// status-att = 'MESSAGES' | 'RECENT' | 'UIDNEXT' | 'UIDVALIDITY' | 'UNSEEN'
+pub(crate) fn status_att_list(i: &[u8]) -> IResult<&[u8], Vec<StatusInfo>> {
+    many1(alt((
+        status_messages,
+        status_recent,
+        status_uidnext,
+        status_uidvalidity,
+        status_unseen,
+    )))(i)
 }
 
 //mailbox = 'INBOX' | astring
@@ -188,8 +285,8 @@ pub(crate) fn capability(i: &[u8]) -> IResult<&[u8], Capability<'_>> {
     );
 
     alt((
-        map(auth_parser, |s| Capability::Auth(s)),
-        map(atom, |s| Capability::Other(s)),
+        map(auth_parser, Capability::Auth),
+        map(atom, Capability::Other),
     ))(i)
 }
 
@@ -220,7 +317,7 @@ pub(crate) fn rtc_bad_charset(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
 
 // capability-data
 pub(crate) fn rtc_capability_data(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
-    map(capability_data, |v| RespTextCode::Capability(v))(i)
+    map(capability_data, RespTextCode::Capability)(i)
 }
 
 // 'PARSE'
@@ -237,7 +334,7 @@ pub(crate) fn rtc_permanent_flags(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> 
             separated_list0(tag(" "), flag_perm),
             tag(")"),
         ),
-        |v| RespTextCode::PermanentFlags(v),
+        RespTextCode::PermanentFlags,
     )(i)
 }
 
@@ -258,23 +355,26 @@ pub(crate) fn rtc_try_create(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
 
 // 'UIDNEXT' SP nz-number
 pub(crate) fn rtc_uidnext(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
-    map(preceded(tag_no_case("UIDNEXT "), nz_number), |result| {
-        RespTextCode::UidNext(result)
-    })(i)
+    map(
+        preceded(tag_no_case("UIDNEXT "), nz_number),
+        RespTextCode::UidNext,
+    )(i)
 }
 
 // 'UIDVALIDITY' SP nz-number
 pub(crate) fn rtc_uidvalidity(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
-    map(preceded(tag_no_case("UIDVALIDITY "), nz_number), |result| {
-        RespTextCode::UidValidity(result)
-    })(i)
+    map(
+        preceded(tag_no_case("UIDVALIDITY "), nz_number),
+        RespTextCode::UidValidity,
+    )(i)
 }
 
 // 'UNSEEN' SP nz-number
 pub(crate) fn rtc_unseen(i: &[u8]) -> IResult<&[u8], RespTextCode<'_>> {
-    map(preceded(tag_no_case("UNSEEN "), nz_number), |result| {
-        RespTextCode::Unseen(result)
-    })(i)
+    map(
+        preceded(tag_no_case("UNSEEN "), nz_number),
+        RespTextCode::Unseen,
+    )(i)
 }
 
 // resp-text-code = "ALERT" | "BADCHARSET" [SP "(" astring *(SP astring) ")" ] |
