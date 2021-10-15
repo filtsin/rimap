@@ -1,3 +1,4 @@
+pub(crate) mod body;
 pub(crate) mod core;
 pub(crate) mod grammar;
 
@@ -5,7 +6,7 @@ use self::core::base64;
 use crate::parser::types::{
     ContinueReq, Greeting, GreetingStatus, TaggedResponse, UntaggedResponse,
 };
-use grammar::{imap_tag, resp_cond_auth, resp_cond_bye, resp_cond_state, resp_text};
+use grammar::{imap_tag, mailbox_data, resp_cond_auth, resp_cond_bye, resp_cond_state, resp_text};
 use nom::{
     branch::alt,
     bytes::streaming::tag,
@@ -28,7 +29,7 @@ pub(crate) fn greeting(i: &[u8]) -> IResult<&[u8], Greeting<'_>> {
                         GreetingStatus::Preauth(resp_text)
                     }
                 }),
-                map(resp_cond_bye, |bye_resp| GreetingStatus::Bye(bye_resp)),
+                map(resp_cond_bye, GreetingStatus::Bye),
             )),
             crlf,
         ),
@@ -41,8 +42,8 @@ pub(crate) fn continue_req(i: &[u8]) -> IResult<&[u8], ContinueReq<'_>> {
     delimited(
         tag("+ "),
         alt((
-            map(resp_text, |text| ContinueReq::Text(text)),
-            map(base64, |base64| ContinueReq::Base64(base64)),
+            map(resp_text, ContinueReq::Text),
+            map(base64, ContinueReq::Base64),
         )),
         crlf,
     )(i)
@@ -62,8 +63,9 @@ pub(crate) fn response_data(i: &[u8]) -> IResult<&[u8], UntaggedResponse<'_>> {
     delimited(
         tag("* "),
         alt((
-            map(resp_cond_state, |res| UntaggedResponse::RespCond(res)),
-            map(resp_cond_bye, |res| UntaggedResponse::RespBye(res)),
+            map(resp_cond_state, UntaggedResponse::RespCond),
+            map(resp_cond_bye, UntaggedResponse::RespBye),
+            map(mailbox_data, UntaggedResponse::MailBox),
         )),
         crlf,
     )(i)

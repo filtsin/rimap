@@ -4,8 +4,9 @@ use std::char::from_u32;
 
 use super::core::*;
 use crate::parser::types::{
-    ByeResponse, Capability, Flag, ImapResult, ListFlag, ListMailBox, MailBoxData, RespCond,
-    RespText, RespTextCode, StatusInfo, StatusResponse,
+    Address, ByeResponse, Capability, DateTime, Envelope, Flag, ImapResult, ListFlag, ListMailBox,
+    MailBoxData, MessageData, Month, MsgAtt, MsgFlag, RespCond, RespText, RespTextCode, StatusInfo,
+    StatusResponse, Time,
 };
 use crate::tag::Tag;
 use nom::{
@@ -16,6 +17,261 @@ use nom::{
     sequence::{delimited, preceded, separated_pair, terminated, tuple},
     IResult,
 };
+
+//message-data = nz-number SP ("EXPUNGE" | ("FETCH" SP msg-att))
+pub(crate) fn message_data(i: &[u8]) -> IResult<&[u8], MessageData<'_>> {
+    todo!()
+}
+
+// msg_att = '(' (msg-att-dynamic | msg-att-static) *(SP (msg-att-dynamic | msg-att-static)) ')'
+pub(crate) fn msg_att(i: &[u8]) -> IResult<&[u8], MsgAtt<'_>> {
+    todo!()
+}
+
+// msg-att-dynamic = 'FLAGS' SP '(' [flag-fetch *(SP flag-fetch)] ')'
+// ; May change for a message
+pub(crate) fn msg_att_dynamic(i: &[u8]) -> IResult<&[u8], MsgAtt<'_>> {
+    map(
+        preceded(
+            tag_no_case("FLAGS "),
+            delimited(tag("("), separated_list1(tag(" "), flag_fetch), tag(")")),
+        ),
+        MsgAtt::Flags,
+    )(i)
+}
+
+// flag-fetch = flag | '\Recent'
+pub(crate) fn flag_fetch(i: &[u8]) -> IResult<&[u8], MsgFlag<'_>> {
+    alt((
+        map(flag, |v| MsgFlag::Common(Flag::from(v))),
+        map(tag_no_case("\\Recent"), |_| MsgFlag::Recent),
+    ))(i)
+}
+
+// msg-att-static = 'ENVELOPE' SP envelope | "INTERNALDATE" SP date-time |
+//                  'RFC822' ['.HEADER' | '.TEXT'] SP nstring |
+//                  'RFC822.SIZE' SP number | 'BODY' ['STRUCTURE'] SP body |
+//                  'BODY' section ['<' number '>'] SP nstring |
+//                  'UID' SP uniqueid
+// ; Must not change for a message
+pub(crate) fn msg_att_static(i: &[u8]) -> IResult<&[u8], MsgAtt<'_>> {
+    alt((
+        map(
+            preceded(tag_no_case("ENVELOPE "), envelope),
+            MsgAtt::Envelope,
+        ),
+        map(
+            preceded(tag_no_case("INTERNALDATE "), date_time),
+            MsgAtt::InternalDate,
+        ),
+        map(preceded(tag_no_case("RFC822 "), nstring), MsgAtt::Rfc822),
+        map(
+            preceded(tag_no_case("RFC822.HEADER "), nstring),
+            MsgAtt::Rfc822Header,
+        ),
+        map(
+            preceded(tag_no_case("RFC822.TEXT "), nstring),
+            MsgAtt::Rfc822Text,
+        ),
+        map(
+            preceded(tag_no_case("RFC822.SIZE "), number),
+            MsgAtt::Rfc822Size,
+        ),
+    ))(i)
+}
+
+// envelope = '(' env-date SP env-subject SP env-from SP env-sender
+//            SP env-reply-to SP env-to SP env-cc SP env-bcc SP env-in-reply-to
+//            SP env-message-id ')'
+// env-date, env-subject, env-in-reply-to, env-message-id = nstring
+// env-from, env-sender, env-reply-to, env-to, env-cc, env-bcc = '(' 1*address ')' | nil
+pub(crate) fn envelope(i: &[u8]) -> IResult<&[u8], Envelope<'_>> {
+    map(
+        delimited(
+            tag("("),
+            tuple((
+                nstring,
+                tag(" "),
+                nstring,
+                tag(" "),
+                envelope_addr,
+                tag(" "),
+                envelope_addr,
+                tag(" "),
+                envelope_addr,
+                tag(" "),
+                envelope_addr,
+                tag(" "),
+                envelope_addr,
+                tag(" "),
+                envelope_addr,
+                tag(" "),
+                nstring,
+                tag(" "),
+                nstring,
+            )),
+            tag(")"),
+        ),
+        |(
+            date,
+            _,
+            subject,
+            _,
+            from,
+            _,
+            sender,
+            _,
+            reply_to,
+            _,
+            to,
+            _,
+            cc,
+            _,
+            bcc,
+            _,
+            in_reply_to,
+            _,
+            message_id,
+        )| Envelope {
+            date,
+            subject,
+            from,
+            sender,
+            reply_to,
+            to,
+            cc,
+            bcc,
+            in_reply_to,
+            message_id,
+        },
+    )(i)
+}
+
+// '(' 1*address ')' | nil
+pub(crate) fn envelope_addr(i: &[u8]) -> IResult<&[u8], Option<Vec<Address<'_>>>> {
+    alt((
+        map(delimited(tag("("), many1(address), tag(")")), Some),
+        nil,
+    ))(i)
+}
+
+// address = '(' addr-name SP addr-adl SP addr-mailbox SP addr-host ')'
+//
+// addr-name = nstring
+// ; If non-NIL holds pharse from [RFC-2822] mailbox after removing quoting
+// addr-adl = nstring
+// ; Holds route from route-addr if non-NIL
+// addr-mailbox = nstring
+// ; NIL indicates end of group; if non-NIL and addr-host is NIL, holds group name
+// ; Otherwise, holds local-part after removing quoting
+// addr-host = nstring
+// ; NIL indicates group syntax. Otherwise, holds domain name
+pub(crate) fn address(i: &[u8]) -> IResult<&[u8], Address<'_>> {
+    map(
+        delimited(
+            tag("("),
+            tuple((
+                nstring,
+                tag(" "),
+                nstring,
+                tag(" "),
+                nstring,
+                tag(" "),
+                nstring,
+            )),
+            tag(")"),
+        ),
+        |(name, _, adl, _, mailbox, _, host)| Address {
+            name,
+            adl,
+            mailbox,
+            host,
+        },
+    )(i)
+}
+
+// date-time = DQUOTE date-day-fixed '-' date-month '-' date-year SP time SP zone DQUOTE
+pub(crate) fn date_time(i: &[u8]) -> IResult<&[u8], DateTime> {
+    map(
+        delimited(
+            tag("\""),
+            tuple((
+                date_day_fixed,
+                tag("-"),
+                date_month,
+                tag("-"),
+                date_year,
+                tag(" "),
+                time,
+                tag(" "),
+                zone,
+            )),
+            tag("\""),
+        ),
+        |(day, _, month, _, year, _, time, _, zone)| DateTime {
+            day,
+            month,
+            year,
+            time,
+            zone,
+        },
+    )(i)
+}
+
+// date-day-fixed = (SP DIGIT) | 2DIGIT
+pub(crate) fn date_day_fixed(i: &[u8]) -> IResult<&[u8], u8> {
+    alt((preceded(tag(" "), fixed_num(1)), fixed_num(2)))(i)
+}
+
+// date-month = 'Jan' | 'Feb' | 'Mar' | 'Apr' | 'May' | 'Jun' | 'Jul' | 'Aug' |
+//              'Sep' | 'Oct' | 'Nov' | 'Dec'
+pub(crate) fn date_month(i: &[u8]) -> IResult<&[u8], Month> {
+    alt((
+        value(Month::Jan, tag_no_case("Jan")),
+        value(Month::Feb, tag_no_case("Feb")),
+        value(Month::Mar, tag_no_case("Mar")),
+        value(Month::Apr, tag_no_case("Apr")),
+        value(Month::May, tag_no_case("May")),
+        value(Month::Jun, tag_no_case("Jun")),
+        value(Month::Jul, tag_no_case("Jul")),
+        value(Month::Aug, tag_no_case("Aug")),
+        value(Month::Sep, tag_no_case("Sep")),
+        value(Month::Oct, tag_no_case("Oct")),
+        value(Month::Nov, tag_no_case("Nov")),
+        value(Month::Dec, tag_no_case("Dec")),
+    ))(i)
+}
+
+// date-year = 4DIGIT
+pub(crate) fn date_year(i: &[u8]) -> IResult<&[u8], u16> {
+    fixed_num(4)(i)
+}
+
+// time = 2DIGIT ':' 2DIGIT ':' 2DIGIT
+pub(crate) fn time(i: &[u8]) -> IResult<&[u8], Time> {
+    map(
+        tuple((fixed_num(2), tag(":"), fixed_num(2), tag(":"), fixed_num(2))),
+        |(hours, _, minutes, _, seconds)| Time {
+            hours,
+            minutes,
+            seconds,
+        },
+    )(i)
+}
+
+// zone = ('+' | '-') 4DIGIT
+pub(crate) fn zone(i: &[u8]) -> IResult<&[u8], i16> {
+    map(
+        tuple((alt((tag("+"), tag("-"))), fixed_num(4))),
+        |(sign, mut value): (_, i16)| {
+            if sign == b"-" {
+                value *= -1;
+            }
+
+            value
+        },
+    )(i)
+}
 
 //mailbox-data = 'FLAGS' SP flag-list | 'LIST' SP mailbox-list | 'LSUB' SP mailbox-list |
 //               'SEARCH' *(SP nz-number) | 'STATUS' SP mailbox SP '(' [status-att-list] ')' |
@@ -69,8 +325,11 @@ pub(crate) fn mailbox_list(i: &[u8]) -> IResult<&[u8], ListMailBox<'_>> {
             delimited(tag("("), opt(mbx_list_flags), tag(")")),
             tag(" "),
             alt((
-                delimited(tag("\""), take_while_m_n(1, 1, is_quoted_char), tag("\"")),
-                tag_no_case("NIL"),
+                map(
+                    delimited(tag("\""), take_while_m_n(1, 1, is_quoted_char), tag("\"")),
+                    Some,
+                ),
+                nil,
             )),
             tag(" "),
             mailbox,
@@ -81,7 +340,7 @@ pub(crate) fn mailbox_list(i: &[u8]) -> IResult<&[u8], ListMailBox<'_>> {
                 None => vec![],
             },
             // SAFETY: is_quoted_char is valid ascii character, so it is valid utf-8
-            delimiter: unsafe { std::str::from_utf8_unchecked(delimiter) },
+            delimiter: unsafe { delimiter.map(|v| std::str::from_utf8_unchecked(v)) },
             name,
         },
     )(i)
@@ -150,6 +409,7 @@ pub(crate) fn status_unseen(i: &[u8]) -> IResult<&[u8], StatusInfo> {
     )(i)
 }
 
+// TODO! Incorrect
 // status-att-list = status-att SP number *(SP status-att SP number)
 // status-att = 'MESSAGES' | 'RECENT' | 'UIDNEXT' | 'UIDVALIDITY' | 'UNSEEN'
 pub(crate) fn status_att_list(i: &[u8]) -> IResult<&[u8], Vec<StatusInfo>> {
@@ -246,6 +506,7 @@ pub(crate) fn flag_extension(i: &[u8]) -> IResult<&[u8], &str> {
     map(tuple((tag("\\"), atom)), |(_, result)| result)(i)
 }
 
+// TODO: Change return type because Flag must not contain Perm
 // flag-perm = flag | '\*'
 pub(crate) fn flag_perm(i: &[u8]) -> IResult<&[u8], Flag<'_>> {
     map(flag, Flag::from)(i)

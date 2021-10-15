@@ -47,6 +47,7 @@ pub(crate) struct TaggedResponse<'a> {
 pub(crate) enum UntaggedResponse<'a> {
     RespCond(RespCond<'a>),
     RespBye(ByeResponse<'a>),
+    MailBox(MailBoxData<'a>),
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -91,6 +92,8 @@ impl TryFrom<&str> for DefinedFlag {
     }
 }
 
+// TODO: Flag should be without Perm branch
+// Perm branch used only for resp_text_code
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum Flag<'a> {
     Defined(DefinedFlag),
@@ -161,7 +164,7 @@ impl<'a> From<&'a str> for ListFlag<'a> {
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ListMailBox<'a> {
     pub(crate) flags: Vec<ListFlag<'a>>,
-    pub(crate) delimiter: &'a str,
+    pub(crate) delimiter: Option<&'a str>,
     pub(crate) name: &'a str,
 }
 
@@ -219,4 +222,148 @@ pub(crate) enum MailBoxData<'a> {
     Status(StatusResponse<'a>),
     Exists(u32),
     Recent(u32),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum MsgFlag<'a> {
+    Common(Flag<'a>),
+    Recent,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Address<'a> {
+    pub(crate) name: Option<&'a str>,
+    pub(crate) adl: Option<&'a str>,
+    pub(crate) mailbox: Option<&'a str>,
+    pub(crate) host: Option<&'a str>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Envelope<'a> {
+    pub(crate) date: Option<&'a str>,
+    pub(crate) subject: Option<&'a str>,
+    pub(crate) from: Option<Vec<Address<'a>>>,
+    pub(crate) sender: Option<Vec<Address<'a>>>,
+    pub(crate) reply_to: Option<Vec<Address<'a>>>,
+    pub(crate) to: Option<Vec<Address<'a>>>,
+    pub(crate) cc: Option<Vec<Address<'a>>>,
+    pub(crate) bcc: Option<Vec<Address<'a>>>,
+    pub(crate) in_reply_to: Option<&'a str>,
+    pub(crate) message_id: Option<&'a str>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum MsgAtt<'a> {
+    Envelope(Envelope<'a>),
+    InternalDate(DateTime),
+    Rfc822(Option<&'a str>),
+    Rfc822Header(Option<&'a str>),
+    Rfc822Text(Option<&'a str>),
+    Rfc822Size(u32),
+    Flags(Vec<MsgFlag<'a>>),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum MessageData<'a> {
+    Expunge(u32),
+    Fetch(MsgAtt<'a>),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Time {
+    pub(crate) hours: u8,
+    pub(crate) minutes: u8,
+    pub(crate) seconds: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Month {
+    Jan,
+    Feb,
+    Mar,
+    Apr,
+    May,
+    Jun,
+    Jul,
+    Aug,
+    Sep,
+    Oct,
+    Nov,
+    Dec,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct DateTime {
+    pub(crate) day: u8,
+    pub(crate) month: Month,
+    pub(crate) year: u16,
+    pub(crate) time: Time,
+    pub(crate) zone: i16,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum Body<'a> {
+    Basic(BodyTypeBasic<'a>),
+    Msg(BodyTypeMsg<'a>),
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MediaType<'a> {
+    Application,
+    Audio,
+    Image,
+    Message,
+    Video,
+    Custom(&'a str),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct MediaBasic<'a> {
+    pub(crate) media_type: MediaType<'a>,
+    pub(crate) subtype: &'a str,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BodyEnc<'a> {
+    N7bit,
+    N8bit,
+    Binary,
+    Base64,
+    QuotedPrintable,
+    Custom(&'a str),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct BodyFields<'a> {
+    pub(crate) param: Option<Vec<(&'a str, &'a str)>>,
+    pub(crate) id: Option<&'a str>,
+    pub(crate) desc: Option<&'a str>,
+    pub(crate) enc: BodyEnc<'a>,
+    pub(crate) octets: u32,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct BodyTypeBasic<'a> {
+    pub(crate) media: MediaBasic<'a>,
+    pub(crate) fields: BodyFields<'a>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct BodyTypeMsg<'a> {
+    pub(crate) fields: BodyFields<'a>,
+    pub(crate) envelope: Envelope<'a>,
+    pub(crate) body: Box<Body<'a>>,
+    pub(crate) lines: u32,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct BodyTypeText<'a> {
+    pub(crate) subtype: &'a str,
+    pub(crate) fields: BodyFields<'a>,
+    pub(crate) lines: u32,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct BodyExt1Part<'a> {
+    md5: Option<&'a str>,
 }

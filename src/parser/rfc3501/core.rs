@@ -1,11 +1,16 @@
 //! IMAP core types
 
+use std::{fmt::Debug, str::FromStr};
+
 use nom::{
     branch::alt,
-    bytes::streaming::{tag, take_while, take_while1, take_while_m_n},
+    bytes::streaming::{tag, tag_no_case, take_while, take_while1, take_while_m_n},
     character::is_alphanumeric,
-    character::streaming::{crlf, u32},
-    combinator::{map_res, not, opt, peek},
+    character::{
+        is_digit,
+        streaming::{crlf, u32},
+    },
+    combinator::{map, map_res, not, opt, peek, value},
     multi::{length_data, many1_count},
     sequence::{delimited, tuple},
     IResult,
@@ -94,6 +99,11 @@ pub(crate) fn is_astring_char(i: u8) -> bool {
     is_atom_char(i) || is_resp_specials(i)
 }
 
+// nil = 'NIL'
+pub(crate) fn nil<T>(i: &[u8]) -> IResult<&[u8], Option<T>> {
+    map(tag_no_case("NIL"), |_| None)(i)
+}
+
 // astring = 1*ASTRING-CHAR | string
 pub(crate) fn astring(i: &[u8]) -> IResult<&[u8], &str> {
     alt((
@@ -137,6 +147,12 @@ pub(crate) fn string(i: &[u8]) -> IResult<&[u8], &str> {
     alt((quoted, literal))(i)
 }
 
+// nstring = string | nil
+// nil = 'NIL'
+pub(crate) fn nstring(i: &[u8]) -> IResult<&[u8], Option<&str>> {
+    alt((map(string, Some), nil))(i)
+}
+
 // base64-terminal = (2base64-char '==') | (3base64-char '=')
 pub(crate) fn base64_terminal(i: &[u8]) -> IResult<&[u8], &str> {
     map_res(
@@ -173,4 +189,17 @@ pub(crate) fn number(i: &[u8]) -> IResult<&[u8], u32> {
 pub(crate) fn nz_number(i: &[u8]) -> IResult<&[u8], u32> {
     let (i, (_, result)) = tuple((not(tag("0")), number))(i)?;
     Ok((i, result))
+}
+
+// Help function for syntax like mDIGIT
+pub(crate) fn fixed_num<T: FromStr>(m: usize) -> impl Fn(&[u8]) -> IResult<&[u8], T>
+where
+    <T as FromStr>::Err: Debug,
+{
+    move |i: &[u8]| {
+        // SAFETY: v is slice of DIGIT('0' - '9') so it's valid utf-8
+        map(take_while_m_n(m, m, is_digit), |v| unsafe {
+            std::str::from_utf8_unchecked(v).parse().unwrap()
+        })(i)
+    }
 }
